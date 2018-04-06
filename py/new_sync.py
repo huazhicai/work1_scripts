@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # coding:utf-8
-# author: dainel & Seven
+# author: Seven
 
 import os
 from operator import methodcaller
@@ -11,11 +11,12 @@ import smtplib
 from email.mime.text import MIMEText
 from logging.handlers import TimedRotatingFileHandler
 import sys
+import subprocess
 
 try:
-    from os import scandir
+    from os import scandir   #python3
 except ImportError:
-    from scandir import scandir
+    from scandir import scandir  # python2
 
 remote_ip = sys.argv[1]
 
@@ -24,7 +25,7 @@ class SyncRecord(object):
     """上传录音的程序"""
 
     def __init__(self, logger):
-        self.recordfile_dir = '/home/recordfile'
+        self.recordfile_dir = '/home/seven'
         self.scp_dst = 'root@{}:/home/recordfile/'.format(remote_ip)
         if not os.path.exists('/recordfile_bak'):
             os.mkdir("/recordfile_bak")
@@ -59,8 +60,10 @@ class SyncRecord(object):
         dir_entities = sorted(dir_entities, key=methodcaller('inode'))
         # 遍历文件夹'/home/recordfile'内的所有文件
         for dir_entity in dir_entities:
-            path = dir_entity.path
+            # 绝对路径/home/recordfile/5ab70a173baaaafc8d609e06_1522380690.tar
+            # dir_entity.name 为 5ab70a173baaaafc8d609e06_1522380690.tar
             name = path[-3:]
+            path = dir_entity.path  
             if name == 'tar':
                 cur_time = time.time()
                 m_time = os.path.getmtime(path)
@@ -68,47 +71,47 @@ class SyncRecord(object):
                 if cur_time - m_time > 60:
                     try:
                         scp_cmd = 'scp %s %s' % (path, self.scp_dst)
-                        assert os.popen(scp_cmd)
+                        subprocess.check_call(scp_cmd, shell=True)
+                        # os.popen(scp_cmd)
                         self.log.info('%s has been copy to %s ' % (path, self.scp_dst))
-                        self.log.error(path)
                         # 复制成功后的文件移到备份目录中
                         try:
                             mv_cmd = 'mv %s %s' % (path, self.mv_dst)
-                            assert os.popen(mv_cmd).read()
-                            os.popen(mv_cmd)
+                            subprocess.check_call(mv_cmd, shell=True)
                             self.log.info('%s has been moved to %s ' % (path, self.mv_dst))
-                        except AssertionError as e:
+                        except Exception as e:
                             # 移动文件失败，应该是根目录磁盘满了，发邮件警告
-                            self.log.error(str(e) + path)
+                            self.log.error(str(e) + "move failed")
                             host_name = os.popen('hostname').read().strip()
                             self.send_email(host_name, 'Failed to move %s to %s ' % (path, self.mv_dst))
                             # 根目录磁盘满了，退出进程
                             # sys.exit()
-                    except Exception as e:
+                    except subprocess.CalledProcessError as e:
                         # 复制到远程失败，发送警告邮件
-                        self.log.error(str(e) + path)
+                        self.log.error(str(e))
                         host_name = os.popen('hostname').read().strip()
                         message1 = '%s: %s, Failed transfer %s to %s \n' % (
-                                        datetime.now(), e, path, self.scp_dst)
-                        message2 = "程序休眠10分钟，检查网络是否通畅"
+                            datetime.now(), e, path, self.scp_dst)
+                        message2 = "程序休眠5分钟，检查网络是否通畅"
                         self.send_email(host_name, message1 + message2)
-                        # 程序休眠10分钟，检查网络
-                        time.sleep(600)
+                        # 程序休眠5分钟，检查网络
+                        time.sleep(300)
             else:
                 # 非tar包文件，直接移到备份目录'/recordfile_bak'
-                # os.chdir(self.recordfile_dir)
-                os.popen('mv %s %s' % (dir_entity.path, self.mv_dst))
+                subprocess.check_call('mv %s %s' % (dir_entity.path, self.mv_dst), shell=True)
+                self.log.warning('%s has been move to %s' % (dir_entity.path, self.mv_dst))
 
 
 def main():
     # 日志回滚
     logging.basicConfig()
     logger = logging.getLogger('logger')
-    logger.setLevel(logging.INFO)
+    # 每次debug, 下面调用可以调用等级高的，不可用等级低的
+    logger.setLevel(logging.DEBUG)
     if not os.path.exists('./log'):
         os.mkdir("./log")
-    # 创建日志处理对象，保留7天内的日志
-    timefile_handler = TimedRotatingFileHandler('log/sync.log', when='M', interval=1, backupCount=7)
+    # 创建日志处理对象，保留7天内的日志，MIDNIGHT凌晨回滚
+    timefile_handler = TimedRotatingFileHandler('log/sync.log', when='MIDNIGHT', interval=1, backupCount=7)
     timefile_handler.suffix = "%Y-%m-%d"
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     timefile_handler.setFormatter(formatter)
